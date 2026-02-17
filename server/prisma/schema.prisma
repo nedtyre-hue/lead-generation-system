@@ -1,0 +1,52 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Lead {
+  id                  Int       @id @default(autoincrement())
+  email               String    @unique
+  firstName           String?
+  lastName            String?
+  gender              String?
+  company             String?
+  source              String?
+  sourceDetail        String?
+  jobTitle            String?
+  industry            String?
+  location            String?
+  companyDomain       String?
+  linkedinUrl         String?
+  sourceCampaignTag   String
+  verifiedStatus      String?
+  verifiedAt          DateTime?
+  manyreachCampaignId String?
+  manyreachListId     String?
+  pushedToManyReach   Boolean   @default(false)
+  pushedAt            DateTime?
+  pushError           String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@map("leads_clean")
+}
+
+model Settings {
+  key   String @id
+  value String
+}
+
+model SuppressionEmail {
+  email     String   @id
+  source    String   @default("manual") // "manual", "manyreach", "csv_import"
+  createdAt DateTime @default(now())
+
+  @@map("suppression_emails")
+}

@@ -1,0 +1,17 @@
+{
+  "name": "lead-generation-system",
+  "version": "1.0.0",
+  "description": "Lead generation and verification system with BigQuery, Reoon, and ManyReach integration",
+  "scripts": {
+    "install:all": "cd server && npm install && cd ../client && npm install",
+    "build:client": "cd client && npm run build",
+    "start": "cd server && node index.js",
+    "dev:server": "cd server && npm run dev",
+    "dev:client": "cd client && npm run dev",
+    "build": "npm run install:all && npm run build:client",
+    "postinstall": "cd server && npm install && npx prisma generate && cd ../client && npm install && npm run build"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

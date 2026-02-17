@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+
+# Environment & secrets
+.env
+.env.local
+.env.production
+server/credentials.json
+server/.env
+
+# Debug / log files
+*.log
+server/bq_debug.log*
+server/push_debug.log*
+server/push_entry.log
+server/reoon_debug.log
+server/reoon_samples/
+
+# SQLite database (local dev only — Render uses Postgres or env-based)
+server/prisma/*.db
+server/prisma/*.db-journal
+
+# Build artifacts
+client/dist/
+client/node_modules/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test / debug scripts (not needed in prod)
+server/test-*.js
+server/check_db.js
+server/check-schema.js
+server/reproduce_and_fix.js
+server/reproduce_issue.js
+server/fix-multi-emails.js
+
+# Large spec files
+manyreach-v2-spec.json
