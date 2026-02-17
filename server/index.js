@@ -1539,7 +1539,8 @@ function sleep(ms) {
 }
 
 // Catch-all: serve React SPA for any non-API routes (must be AFTER all API routes)
-app.get('*', (req, res) => {
+// Express 5 requires named wildcard: /{*path} instead of *
+app.get('/{*path}', (req, res) => {
     const indexPath = path.join(clientDistPath, 'index.html');
     if (fs.existsSync(indexPath)) {
         res.sendFile(indexPath);
