@@ -140,6 +140,49 @@ async function loadConfig() {
     }, {});
 }
 
+// ─── AUTO-SEED: Populate Settings from env vars on first deploy ────────────
+// On Render, env vars are set in the dashboard. This seeds the DB so the user
+// never has to manually fill in the Settings page on a fresh deploy.
+async function seedSettingsFromEnv() {
+    const ENV_TO_SETTINGS = {
+        'BQ_PROJECT_ID': 'bq_project_id',
+        'BQ_DATASET': 'bq_dataset',
+        'BQ_TABLE': 'bq_table',
+        'BQ_QUERY_TEMPLATE': 'bq_query_template',
+        'REOON_API_KEY': 'reoon_api_key',
+        'REOON_STATUSES': 'reoon_statuses',
+        'MANYREACH_API_KEY': 'manyreach_api_key',
+        'MANYREACH_LIST_ID': 'manyreach_list_id',
+        'MANYREACH_BATCH_SIZE': 'manyreach_batch_size',
+        'MANYREACH_BATCH_DELAY': 'manyreach_batch_delay',
+        'MANYREACH_RETRY_DELAY': 'manyreach_retry_delay',
+        'ENABLED_SOURCES': 'enabled_sources',
+    };
+
+    let seeded = 0;
+    for (const [envKey, settingKey] of Object.entries(ENV_TO_SETTINGS)) {
+        const envValue = process.env[envKey];
+        if (!envValue) continue;
+
+        // Only seed if the setting doesn't exist yet (don't overwrite UI changes)
+        const existing = await prisma.settings.findFirst({ where: { key: settingKey } });
+        if (!existing || !existing.value) {
+            await prisma.settings.upsert({
+                where: { key: settingKey },
+                update: { value: envValue },
+                create: { key: settingKey, value: envValue },
+            });
+            seeded++;
+            console.log(`[SEED] Setting '${settingKey}' = '${settingKey.includes('key') ? '***' : envValue}' (from env ${envKey})`);
+        }
+    }
+    if (seeded > 0) {
+        console.log(`[SEED] Auto-seeded ${seeded} settings from environment variables.`);
+    } else {
+        console.log('[SEED] All settings already present in DB, no env seeding needed.');
+    }
+}
+
 // ─── HELPER: Auto-provision ManyReach List ID ────────────────────────────
 // If manyreach_list_id isn't in Settings yet, create a "Lead App Imports" list
 // via the API and store the returned ID. This means the user never needs to
@@ -1549,6 +1592,12 @@ app.get('/{*path}', (req, res) => {
     }
 });
 
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', async () => {
     console.log(`Server running on port ${PORT}`);
+    // Auto-seed settings from env vars (critical for fresh Render deploys)
+    try {
+        await seedSettingsFromEnv();
+    } catch (err) {
+        console.error('[SEED] Failed to auto-seed settings:', err.message);
+    }
 });
