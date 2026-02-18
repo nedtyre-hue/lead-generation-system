@@ -69,6 +69,19 @@ export default function Dashboard() {
             .catch(() => { });
     }, []);
 
+    // ─── Keep-Alive Ping ─────────────────────────────────────────
+    // Pings /api/health every 3 minutes while this tab is open,
+    // preventing Render free tier from sleeping the server.
+    useEffect(() => {
+        const PING_INTERVAL_MS = 3 * 60 * 1000; // 3 minutes
+        const interval = setInterval(() => {
+            fetch(`${API_BASE}/api/health`).catch(() => { });
+        }, PING_INTERVAL_MS);
+        // Also ping immediately on mount so we wake Render right away
+        fetch(`${API_BASE}/api/health`).catch(() => { });
+        return () => clearInterval(interval);
+    }, []);
+
     async function fetchStats() {
         try {
             const res = await fetch(`${API_BASE}/api/leads/stats`);
