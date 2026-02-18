@@ -53,6 +53,11 @@ export default function Dashboard({ initialListFilter, onClearListFilter }) {
     const STATS_PER_PAGE = 15;
     const [availableSources, setAvailableSources] = useState([]);
 
+    // ─── Active Jobs Tracking ─────────────────────────────
+    const [activeJobs, setActiveJobs] = useState([]);
+    const [recentJobs, setRecentJobs] = useState([]);
+    const [showRecentJobs, setShowRecentJobs] = useState(false);
+
     // Load stats on mount
     useEffect(() => {
         fetchStats();
@@ -95,6 +100,22 @@ export default function Dashboard({ initialListFilter, onClearListFilter }) {
         }, PING_INTERVAL_MS);
         // Also ping immediately on mount so we wake Render right away
         fetch(`${API_BASE}/api/health`).catch(() => { });
+        return () => clearInterval(interval);
+    }, []);
+
+    // ─── Poll Active Jobs ──────────────────────────────────
+    useEffect(() => {
+        const fetchJobs = () => {
+            fetch(`${API_BASE}/api/jobs/active`)
+                .then(res => res.json())
+                .then(data => {
+                    setActiveJobs(data.running || []);
+                    setRecentJobs(data.recent || []);
+                })
+                .catch(() => { });
+        };
+        fetchJobs(); // Immediately on mount
+        const interval = setInterval(fetchJobs, 10 * 1000); // Every 10 seconds
         return () => clearInterval(interval);
     }, []);
 
@@ -371,6 +392,86 @@ export default function Dashboard({ initialListFilter, onClearListFilter }) {
 
     return (
         <div className="space-y-6">
+
+            {/* ── Active Jobs Panel ─────────────────────── */}
+            {(activeJobs.length > 0 || recentJobs.length > 0) && (
+                <div className="bg-white shadow rounded-lg p-6 border-l-4 border-yellow-400">
+                    <h2 className="text-xl font-semibold mb-3 text-gray-800">
+                        ⚡ Active Jobs
+                    </h2>
+
+                    {activeJobs.length === 0 && (
+                        <p className="text-sm text-gray-500 mb-3">No jobs currently running.</p>
+                    )}
+
+                    {activeJobs.map(job => {
+                        const pct = job.requested > 0 ? Math.min(100, Math.round(job.verified / job.requested * 100)) : 0;
+                        return (
+                            <div key={job.id} className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                                <div className="flex justify-between items-center mb-2">
+                                    <span className="font-semibold text-gray-800">
+                                        🔄 {job.listName}
+                                    </span>
+                                    <span className="text-xs bg-yellow-200 text-yellow-800 px-2 py-1 rounded-full font-medium">
+                                        RUNNING
+                                    </span>
+                                </div>
+                                <div className="w-full bg-gray-200 rounded-full h-3 mb-2">
+                                    <div
+                                        className="bg-yellow-500 h-3 rounded-full transition-all duration-500"
+                                        style={{ width: `${pct}%` }}
+                                    />
+                                </div>
+                                <div className="flex justify-between text-xs text-gray-500">
+                                    <span>{job.verified} / {job.requested} verified ({pct}%)</span>
+                                    <span>{job.message}</span>
+                                </div>
+                                <div className="text-xs text-gray-400 mt-1">
+                                    Started: {new Date(job.createdAt).toLocaleTimeString()}
+                                    {' · '}
+                                    Updated: {new Date(job.updatedAt).toLocaleTimeString()}
+                                </div>
+                            </div>
+                        );
+                    })}
+
+                    {recentJobs.length > 0 && (
+                        <div className="mt-2">
+                            <button
+                                onClick={() => setShowRecentJobs(!showRecentJobs)}
+                                className="text-xs text-gray-500 hover:text-gray-700"
+                            >
+                                {showRecentJobs ? '▲ Hide' : '▼ Show'} {recentJobs.length} recent job{recentJobs.length !== 1 ? 's' : ''}
+                            </button>
+                            {showRecentJobs && (
+                                <div className="mt-2 space-y-2">
+                                    {recentJobs.map(job => (
+                                        <div key={job.id} className={`p-3 rounded-lg border text-sm ${job.status === 'done' ? 'bg-green-50 border-green-200' : job.status === 'error' ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-200'}`}>
+                                            <div className="flex justify-between items-center">
+                                                <span className="font-medium text-gray-700">
+                                                    {job.status === 'done' ? '✅' : job.status === 'error' ? '❌' : '⚠️'}{' '}
+                                                    {job.listName}
+                                                </span>
+                                                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${job.status === 'done' ? 'bg-green-200 text-green-800' : job.status === 'error' ? 'bg-red-200 text-red-800' : 'bg-gray-200 text-gray-800'}`}>
+                                                    {job.status.toUpperCase()}
+                                                </span>
+                                            </div>
+                                            <div className="text-xs text-gray-500 mt-1">
+                                                {job.verified}/{job.requested} verified
+                                                {' · '}
+                                                {job.message}
+                                                {' · '}
+                                                {new Date(job.updatedAt).toLocaleString()}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            )}
+
             {/* ── Suppression List ───────────────────────── */}
             <div className="bg-white shadow rounded-lg p-6 border-l-4 border-red-400">
                 <h2 className="text-xl font-semibold mb-2 text-gray-800">

@@ -509,9 +509,34 @@ app.get('/api/lists/generate', async (req, res) => {
 
     // Abort detection: when frontend closes connection, stop the loop
     let aborted = false;
+
+    // ─── Job Tracking: create DB record ─────────────────────────
+    let jobRecord;
+    try {
+        jobRecord = await prisma.job.create({
+            data: {
+                listName,
+                status: 'running',
+                requested: requestedTarget,
+                verified: 0,
+                message: `Starting generation for "${listName}"`
+            }
+        });
+        console.log(`[JOB] Created job ${jobRecord.id} for list "${listName}"`);
+    } catch (jobErr) {
+        console.error('[JOB] Failed to create job record:', jobErr.message);
+    }
+
     req.on('close', () => {
         aborted = true;
         console.log(`[ABORT] Client disconnected — generation for "${listName}" will stop.`);
+        // Mark job as aborted in DB (async fire-and-forget)
+        if (jobRecord) {
+            prisma.job.update({
+                where: { id: jobRecord.id },
+                data: { status: 'aborted', message: 'Client disconnected' }
+            }).catch(() => { });
+        }
     });
 
     try {
@@ -915,6 +940,17 @@ app.get('/api/lists/generate', async (req, res) => {
                             breakdown: statusBreakdown,
                             message: `Verified: ${cleanLeads.length}/${requestedTarget} clean leads (${totalSentToReoon} Reoon calls, ${cachedHits} cached)`
                         });
+
+                        // Update job record with progress
+                        if (jobRecord) {
+                            prisma.job.update({
+                                where: { id: jobRecord.id },
+                                data: {
+                                    verified: cleanLeads.length,
+                                    message: `Verifying: ${cleanLeads.length}/${requestedTarget}`
+                                }
+                            }).catch(() => { });
+                        }
                     }
                 }
 
@@ -1003,12 +1039,60 @@ app.get('/api/lists/generate', async (req, res) => {
                 ? `Generated ${cleanLeads.length} leads (Target ${requestedTarget}). Source exhausted after checking ${candidatesChecked} candidates.`
                 : `Successfully generated ${cleanLeads.length} clean leads for list "${listName}".`
         });
+
+        // Finalize job record
+        if (jobRecord) {
+            const finalStatus = aborted ? 'aborted' : 'done';
+            await prisma.job.update({
+                where: { id: jobRecord.id },
+                data: {
+                    status: finalStatus,
+                    verified: cleanLeads.length,
+                    message: aborted
+                        ? `Aborted — saved ${cleanLeads.length} leads`
+                        : `Done — ${cleanLeads.length} clean leads`
+                }
+            }).catch(() => { });
+            console.log(`[JOB] Job ${jobRecord.id} marked as ${finalStatus}`);
+        }
+
         res.end();
 
     } catch (error) {
         console.error('Error in list generation:', error);
         sendProgress({ type: 'error', message: error.message });
+
+        // Mark job as error
+        if (jobRecord) {
+            await prisma.job.update({
+                where: { id: jobRecord.id },
+                data: { status: 'error', message: error.message }
+            }).catch(() => { });
+        }
+
         res.end();
+    }
+});
+
+// ─── GET ACTIVE / RECENT JOBS ─────────────────────────────────────────
+app.get('/api/jobs/active', async (req, res) => {
+    try {
+        // Get all running jobs
+        const running = await prisma.job.findMany({
+            where: { status: 'running' },
+            orderBy: { createdAt: 'desc' }
+        });
+
+        // Also get the last 10 recently finished jobs (for context)
+        const recent = await prisma.job.findMany({
+            where: { status: { not: 'running' } },
+            orderBy: { updatedAt: 'desc' },
+            take: 10
+        });
+
+        res.json({ running, recent });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
     }
 });
 
@@ -1641,6 +1725,20 @@ app.get('/{*path}', (req, res) => {
 
 app.listen(PORT, '0.0.0.0', async () => {
     console.log(`Server running on port ${PORT}`);
+
+    // Clean up stale running jobs from previous server session
+    try {
+        const stale = await prisma.job.updateMany({
+            where: { status: 'running' },
+            data: { status: 'aborted', message: 'Server restarted — job was still running' }
+        });
+        if (stale.count > 0) {
+            console.log(`[JOB] Marked ${stale.count} stale running job(s) as aborted`);
+        }
+    } catch (err) {
+        console.error('[JOB] Failed to clean up stale jobs:', err.message);
+    }
+
     // Auto-seed settings from env vars (critical for fresh Render deploys)
     try {
         await seedSettingsFromEnv();

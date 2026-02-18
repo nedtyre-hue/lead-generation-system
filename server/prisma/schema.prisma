@@ -50,3 +50,16 @@ model SuppressionEmail {
 
   @@map("suppression_emails")
 }
+
+model Job {
+  id        String   @id @default(cuid())
+  listName  String
+  status    String   @default("running")  // running | done | error | aborted
+  requested Int      @default(0)
+  verified  Int      @default(0)
+  message   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("jobs")
+}
