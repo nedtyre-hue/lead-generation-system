@@ -57,6 +57,7 @@ export default function Dashboard({ initialListFilter, onClearListFilter }) {
     const [activeJobs, setActiveJobs] = useState([]);
     const [recentJobs, setRecentJobs] = useState([]);
     const [showRecentJobs, setShowRecentJobs] = useState(false);
+    const [exportingJobId, setExportingJobId] = useState(null);
 
     // Load stats on mount
     useEffect(() => {
@@ -452,9 +453,24 @@ export default function Dashboard({ initialListFilter, onClearListFilter }) {
                                                     {job.status === 'done' ? '✅' : job.status === 'error' ? '❌' : '⚠️'}{' '}
                                                     {job.listName}
                                                 </span>
-                                                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${job.status === 'done' ? 'bg-green-200 text-green-800' : job.status === 'error' ? 'bg-red-200 text-red-800' : 'bg-gray-200 text-gray-800'}`}>
-                                                    {job.status.toUpperCase()}
-                                                </span>
+                                                <div className="flex items-center gap-2">
+                                                    {job.status === 'done' && (
+                                                        <button
+                                                            onClick={async () => {
+                                                                setExportingJobId(job.id);
+                                                                await handleExport(job.listName);
+                                                                setExportingJobId(null);
+                                                            }}
+                                                            disabled={exportingJobId === job.id}
+                                                            className="text-xs bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700 disabled:bg-green-300 disabled:cursor-wait transition-colors"
+                                                        >
+                                                            {exportingJobId === job.id ? '⏳ Exporting...' : '📥 Export CSV'}
+                                                        </button>
+                                                    )}
+                                                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${job.status === 'done' ? 'bg-green-200 text-green-800' : job.status === 'error' ? 'bg-red-200 text-red-800' : 'bg-gray-200 text-gray-800'}`}>
+                                                        {job.status.toUpperCase()}
+                                                    </span>
+                                                </div>
                                             </div>
                                             <div className="text-xs text-gray-500 mt-1">
                                                 {job.verified}/{job.requested} verified
