@@ -503,12 +503,12 @@ app.get('/api/lists/generate', async (req, res) => {
         'X-Accel-Buffering': 'no'
     });
 
+    // Track whether SSE connection is still open (for sendProgress only)
+    let clientConnected = true;
     const sendProgress = (data) => {
-        try { res.write(`data: ${JSON.stringify(data)}\n\n`); } catch (e) { }
+        if (!clientConnected) return;
+        try { res.write(`data: ${JSON.stringify(data)}\n\n`); } catch (e) { clientConnected = false; }
     };
-
-    // Abort detection: when frontend closes connection, stop the loop
-    let aborted = false;
 
     // ─── Job Tracking: create DB record ─────────────────────────
     let jobRecord;
@@ -527,16 +527,11 @@ app.get('/api/lists/generate', async (req, res) => {
         console.error('[JOB] Failed to create job record:', jobErr.message);
     }
 
+    // Note: we do NOT abort the job when the client disconnects.
+    // The job keeps running on the server to completion.
     req.on('close', () => {
-        aborted = true;
-        console.log(`[ABORT] Client disconnected — generation for "${listName}" will stop.`);
-        // Mark job as aborted in DB (async fire-and-forget)
-        if (jobRecord) {
-            prisma.job.update({
-                where: { id: jobRecord.id },
-                data: { status: 'aborted', message: 'Client disconnected' }
-            }).catch(() => { });
-        }
+        clientConnected = false;
+        console.log(`[SSE] Client disconnected — generation for "${listName}" continues on server.`);
     });
 
     try {
@@ -604,7 +599,7 @@ app.get('/api/lists/generate', async (req, res) => {
         }
 
         // Adaptive Fetch Loop
-        while (cleanLeads.length < requestedTarget && !exhausted && !aborted && candidatesChecked < maxCandidatesCheck) {
+        while (cleanLeads.length < requestedTarget && !exhausted && candidatesChecked < maxCandidatesCheck) {
             batchNum++;
             const remaining = requestedTarget - cleanLeads.length;
             const fetchSize = Math.max(100, Math.min(2000, Math.ceil(remaining * oversampleFactor)));
@@ -631,11 +626,7 @@ app.get('/api/lists/generate', async (req, res) => {
 
                 currentOffset += fetchSize;
 
-                // Check abort immediately after the slow BigQuery call
-                if (aborted) {
-                    console.log('[ABORT] Detected after BigQuery fetch — stopping.');
-                    break;
-                }
+                // (Client disconnect does NOT abort — job runs to completion)
 
                 if (!fetchedRows || fetchedRows.length === 0) {
                     exhausted = true;
@@ -871,7 +862,7 @@ app.get('/api/lists/generate', async (req, res) => {
                     // Reoon verification — only on emails with NO cached result
                     const VERIFY_BATCH = 5;
                     for (let i = 0; i < needsReoon.length; i += VERIFY_BATCH) {
-                        if (cleanLeads.length >= requestedTarget || aborted) break;
+                        if (cleanLeads.length >= requestedTarget) break;
 
                         const batch = needsReoon.slice(i, i + VERIFY_BATCH);
                         totalSentToReoon += batch.length;
@@ -886,7 +877,7 @@ app.get('/api/lists/generate', async (req, res) => {
                         }));
 
                         for (const { lead, verification } of results) {
-                            if (cleanLeads.length >= requestedTarget || aborted) break;
+                            if (cleanLeads.length >= requestedTarget) break;
                             const status = verification.status || 'unknown';
                             statusBreakdown[status] = (statusBreakdown[status] || 0) + 1;
 
@@ -966,12 +957,8 @@ app.get('/api/lists/generate', async (req, res) => {
             }
         } // End While
 
-        if (aborted) {
-            console.log(`[ABORT] Generation stopped by user. Saving ${cleanLeads.length} leads collected so far.`);
-        }
-
-        // Save to DB (even if aborted — save partial results)
-        sendProgress({ type: 'progress', phase: 'saving', clean: cleanLeads.length, target: requestedTarget, message: aborted ? `Stopped! Saving ${cleanLeads.length} leads collected so far...` : `Saving ${cleanLeads.length} leads to database...` });
+        // Save results to DB
+        sendProgress({ type: 'progress', phase: 'saving', clean: cleanLeads.length, target: requestedTarget, message: `Saving ${cleanLeads.length} leads to database...` });
 
         if (cleanLeads.length > 0) {
             const DB_BATCH = 500;
@@ -1040,23 +1027,20 @@ app.get('/api/lists/generate', async (req, res) => {
                 : `Successfully generated ${cleanLeads.length} clean leads for list "${listName}".`
         });
 
-        // Finalize job record
+        // Finalize job record — always 'done' (job ran to completion)
         if (jobRecord) {
-            const finalStatus = aborted ? 'aborted' : 'done';
             await prisma.job.update({
                 where: { id: jobRecord.id },
                 data: {
-                    status: finalStatus,
+                    status: 'done',
                     verified: cleanLeads.length,
-                    message: aborted
-                        ? `Aborted — saved ${cleanLeads.length} leads`
-                        : `Done — ${cleanLeads.length} clean leads`
+                    message: `Done — ${cleanLeads.length} clean leads`
                 }
             }).catch(() => { });
-            console.log(`[JOB] Job ${jobRecord.id} marked as ${finalStatus}`);
+            console.log(`[JOB] Job ${jobRecord.id} marked as done (${cleanLeads.length} leads)`);
         }
 
-        res.end();
+        try { res.end(); } catch (e) { /* client already gone */ }
 
     } catch (error) {
         console.error('Error in list generation:', error);
@@ -1070,7 +1054,7 @@ app.get('/api/lists/generate', async (req, res) => {
             }).catch(() => { });
         }
 
-        res.end();
+        try { res.end(); } catch (e) { /* client already gone */ }
     }
 });
 
@@ -1726,18 +1710,9 @@ app.get('/{*path}', (req, res) => {
 app.listen(PORT, '0.0.0.0', async () => {
     console.log(`Server running on port ${PORT}`);
 
-    // Clean up stale running jobs from previous server session
-    try {
-        const stale = await prisma.job.updateMany({
-            where: { status: 'running' },
-            data: { status: 'aborted', message: 'Server restarted — job was still running' }
-        });
-        if (stale.count > 0) {
-            console.log(`[JOB] Marked ${stale.count} stale running job(s) as aborted`);
-        }
-    } catch (err) {
-        console.error('[JOB] Failed to clean up stale jobs:', err.message);
-    }
+    // Note: we do NOT auto-mark running jobs as aborted on startup.
+    // Jobs survive server restarts — they stay 'running' in the DB.
+    // A smarter stale-job cleanup can be added later if needed.
 
     // Auto-seed settings from env vars (critical for fresh Render deploys)
     try {
