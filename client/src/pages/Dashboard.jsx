@@ -157,7 +157,14 @@ export default function Dashboard() {
         } else {
             if (browseTag) params.set('sourceCampaignTag', browseTag);
         }
-        window.open(`${API_BASE}/api/leads/export?${params.toString()}`);
+        // Use a one-time programmatic <a> click to guarantee exactly one download
+        const url = `${API_BASE}/api/leads/export?${params.toString()}`;
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = '';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
     };
 
     // ─── List Generator Handler (SSE for live progress) ─────────
@@ -560,18 +567,7 @@ export default function Dashboard() {
                                     ))}
                                 </>
                             )}
-                            {/* Sample CSV download */}
-                            {listResult.stats?.sampleCsvFile && (
-                                <li className="pt-2">
-                                    <a
-                                        href={`${API_BASE}/api/reoon-samples/${listResult.stats.sampleCsvFile}`}
-                                        download
-                                        className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 underline font-medium"
-                                    >
-                                        📋 Download Audit CSV ({listResult.stats.sampleCsvEntries} samples)
-                                    </a>
-                                </li>
-                            )}
+                            {/* Audit CSV link removed — not needed for this workflow */}
                             {listResult.exhausted && <li className="text-orange-600 font-bold italic">⚠️ Source Exhausted — could not reach target</li>}
                         </ul>
                         <button
