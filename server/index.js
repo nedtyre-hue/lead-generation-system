@@ -1162,6 +1162,53 @@ app.get('/api/leads/stats', async (req, res) => {
     }
 });
 
+// ─── GET LIST SUMMARIES (all generated lists with counts) ───────────────
+app.get('/api/lists', async (req, res) => {
+    try {
+        // Get all distinct list tags
+        const tags = await prisma.lead.findMany({
+            select: { sourceCampaignTag: true },
+            distinct: ['sourceCampaignTag']
+        });
+
+        const lists = await Promise.all(tags.map(async ({ sourceCampaignTag }) => {
+            const [totalLeads, cleanLeads, firstLead, lastLead] = await Promise.all([
+                prisma.lead.count({ where: { sourceCampaignTag } }),
+                prisma.lead.count({ where: { sourceCampaignTag, verifiedStatus: 'safe' } }),
+                prisma.lead.findFirst({
+                    where: { sourceCampaignTag },
+                    orderBy: { createdAt: 'asc' },
+                    select: { createdAt: true }
+                }),
+                prisma.lead.findFirst({
+                    where: { sourceCampaignTag },
+                    orderBy: { createdAt: 'desc' },
+                    select: { createdAt: true }
+                })
+            ]);
+
+            return {
+                listName: sourceCampaignTag,
+                totalLeads,
+                cleanLeads,
+                createdAt: firstLead?.createdAt || null,
+                lastUpdatedAt: lastLead?.createdAt || null
+            };
+        }));
+
+        // Sort by most recent first
+        lists.sort((a, b) => {
+            if (!a.lastUpdatedAt) return 1;
+            if (!b.lastUpdatedAt) return -1;
+            return new Date(b.lastUpdatedAt) - new Date(a.lastUpdatedAt);
+        });
+
+        res.json(lists);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // ─── PHASE 2: PUSH TO MANYREACH (DISABLED — use CSV export instead) ─────
 // ManyReach integration is disabled in this version.
 // Export leads as CSV and upload manually.

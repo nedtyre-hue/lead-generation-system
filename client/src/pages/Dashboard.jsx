@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import API_BASE from '../config';
 
-export default function Dashboard() {
+export default function Dashboard({ initialListFilter, onClearListFilter }) {
+    const browseSectionRef = useRef(null);
     // ─── Generate Leads (Quick) ─────────────────────────────────
     const [campaignName, setCampaignName] = useState('');
     const [gender, setGender] = useState('All');
@@ -68,6 +69,21 @@ export default function Dashboard() {
             })
             .catch(() => { });
     }, []);
+
+    // ─── Handle incoming list filter from My Lists page ─────────
+    useEffect(() => {
+        if (initialListFilter) {
+            setBrowseTag(initialListFilter);
+            setLeadsPage(1);
+            // Defer fetchLeads until browseTag state is set
+            setTimeout(() => {
+                if (browseSectionRef.current) {
+                    browseSectionRef.current.scrollIntoView({ behavior: 'smooth' });
+                }
+            }, 100);
+            if (onClearListFilter) onClearListFilter();
+        }
+    }, [initialListFilter]);
 
     // ─── Keep-Alive Ping ─────────────────────────────────────────
     // Pings /api/health every 3 minutes while this tab is open,
@@ -163,21 +179,44 @@ export default function Dashboard() {
         }
     };
 
-    const handleExport = (tag) => {
+    // ─── CSV Export: fetch blob then download (prevents retries) ──
+    const exportingRef = useRef(false);
+    const handleExport = async (tag) => {
+        // Guard: prevent double-clicks or re-entrant calls
+        if (exportingRef.current) return;
+        exportingRef.current = true;
+
         const params = new URLSearchParams();
         if (tag) {
             params.set('sourceCampaignTag', tag);
         } else {
             if (browseTag) params.set('sourceCampaignTag', browseTag);
         }
-        // Use a one-time programmatic <a> click to guarantee exactly one download
-        const url = `${API_BASE}/api/leads/export?${params.toString()}`;
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = '';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
+
+        try {
+            const url = `${API_BASE}/api/leads/export?${params.toString()}`;
+            const response = await fetch(url);
+            if (!response.ok) throw new Error('Export failed');
+
+            const blob = await response.blob();
+            const blobUrl = URL.createObjectURL(blob);
+            const filename = `${tag || browseTag || 'leads'}-${Date.now()}.csv`;
+
+            const a = document.createElement('a');
+            a.href = blobUrl;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+
+            // Revoke the blob URL after a short delay
+            setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+        } catch (err) {
+            console.error('Export error:', err);
+            alert('CSV export failed: ' + err.message);
+        } finally {
+            exportingRef.current = false;
+        }
     };
 
     // ─── List Generator Handler (SSE for live progress) ─────────
@@ -731,7 +770,7 @@ export default function Dashboard() {
 
 
             {/* ── Browse Leads ──────────────────────────────────── */}
-            <div className="bg-white shadow rounded-lg p-6">
+            <div ref={browseSectionRef} className="bg-white shadow rounded-lg p-6">
                 <h2 className="text-xl font-semibold mb-4 text-gray-800">🔍 Browse Leads</h2>
 
                 <div className="flex flex-wrap gap-3 items-end mb-4">
