@@ -548,7 +548,7 @@ app.get('/api/lists/generate', async (req, res) => {
         }
 
         const oversampleFactor = parseFloat(config.oversample_factor || '5.0');
-        const allowedStatuses = JSON.parse(config.reoon_statuses || '["safe"]');
+        const allowedStatuses = JSON.parse(config.reoon_statuses || '["safe","catch_all"]');
         console.log(`\n=== LIST GENERATION: "${listName}" ===`);
         console.log(`Target: ${requestedTarget}, Gender: ${gender || 'All'}, Industry: ${industryFilter || '(any)'}, Allowed: ${JSON.stringify(allowedStatuses)}`);
 
@@ -569,10 +569,10 @@ app.get('/api/lists/generate', async (req, res) => {
         let candidatesChecked = 0;
         let duplicatesSkipped = 0;
         let suppressedSkipped = 0;
-        let currentOffset = 0;
         let exhausted = false;
         const seenThisRun = new Set();
-        const maxCandidatesCheck = requestedTarget * 20;
+        let consecutiveEmptyBatches = 0;
+        const MAX_EMPTY_BATCHES = 5; // Stop after 5 consecutive batches with 0 new leads
         let batchNum = 0;
         const reoonSampleLog = [];  // Logs first 200 emails per run for audit CSV
         const sourceStats = {};     // Per-source Reoon result breakdown
@@ -599,7 +599,7 @@ app.get('/api/lists/generate', async (req, res) => {
         }
 
         // Adaptive Fetch Loop
-        while (cleanLeads.length < requestedTarget && !exhausted && candidatesChecked < maxCandidatesCheck) {
+        while (cleanLeads.length < requestedTarget && !exhausted && consecutiveEmptyBatches < MAX_EMPTY_BATCHES) {
             batchNum++;
             const remaining = requestedTarget - cleanLeads.length;
             const fetchSize = Math.max(100, Math.min(2000, Math.ceil(remaining * oversampleFactor)));
@@ -619,12 +619,11 @@ app.get('/api/lists/generate', async (req, res) => {
             });
 
             try {
+                const leadsBeforeBatch = cleanLeads.length;
                 const fetchedRows = await bigqueryService.fetchLeads({
                     bq_project_id: config.bq_project_id,
                     bq_query_template: baseQuery
-                }, 'All', fetchSize, currentOffset, null); // null = no source filter, pull from ALL
-
-                currentOffset += fetchSize;
+                }, 'All', fetchSize, 0, null); // offset=0 always: RAND() handles randomization
 
                 // (Client disconnect does NOT abort — job runs to completion)
 
@@ -945,15 +944,23 @@ app.get('/api/lists/generate', async (req, res) => {
                     }
                 }
 
-            } catch (err) {
-                console.error('Error in list fetch loop:', err.message);
-                sendProgress({ type: 'progress', phase: 'error_in_batch', message: `Error in batch ${batchNum}: ${err.message}. Continuing with ${cleanLeads.length} leads...` });
-                if (cleanLeads.length === 0) {
-                    sendProgress({ type: 'error', message: err.message });
-                    return res.end();
+                // Track consecutive empty batches for smart exhaustion detection
+                const leadsThisBatch = cleanLeads.length - leadsBeforeBatch;
+                if (leadsThisBatch === 0) {
+                    consecutiveEmptyBatches++;
+                    console.log(`[LIST] Batch ${batchNum}: 0 new leads (${consecutiveEmptyBatches}/${MAX_EMPTY_BATCHES} consecutive empty)`);
+                } else {
+                    consecutiveEmptyBatches = 0;
+                    console.log(`[LIST] Batch ${batchNum}: +${leadsThisBatch} leads (${cleanLeads.length}/${requestedTarget})`);
                 }
-                exhausted = true;
-                break;
+
+            } catch (err) {
+                console.error(`[LIST] Error in batch ${batchNum}:`, err.message);
+                sendProgress({ type: 'progress', phase: 'error_in_batch', message: `Error in batch ${batchNum}: ${err.message}. Retrying next batch...` });
+                consecutiveEmptyBatches++;
+                console.log(`[LIST] Batch error counts as empty (${consecutiveEmptyBatches}/${MAX_EMPTY_BATCHES})`);
+                // Errors are retryable — don't set exhausted=true
+                // After MAX_EMPTY_BATCHES consecutive failures, the while loop exits naturally
             }
         } // End While
 
@@ -1023,7 +1030,9 @@ app.get('/api/lists/generate', async (req, res) => {
             cleanLeads: cleanLeads.length,
             exhausted,
             message: cleanLeads.length < requestedTarget
-                ? `Generated ${cleanLeads.length} leads (Target ${requestedTarget}). Source exhausted after checking ${candidatesChecked} candidates.`
+                ? (exhausted
+                    ? `Generated ${cleanLeads.length}/${requestedTarget} leads. BigQuery source fully exhausted (no more matching rows after ${candidatesChecked} candidates).`
+                    : `Generated ${cleanLeads.length}/${requestedTarget} leads. Stopped after ${consecutiveEmptyBatches} consecutive batches with no new verified leads (${candidatesChecked} candidates checked, ${totalSentToReoon} sent to Reoon).`)
                 : `Successfully generated ${cleanLeads.length} clean leads for list "${listName}".`
         });
 
@@ -1034,7 +1043,9 @@ app.get('/api/lists/generate', async (req, res) => {
                 data: {
                     status: 'done',
                     verified: cleanLeads.length,
-                    message: `Done — ${cleanLeads.length} clean leads`
+                    message: cleanLeads.length < requestedTarget
+                        ? `Done — ${cleanLeads.length}/${requestedTarget} leads (source ${exhausted ? 'exhausted' : 'low yield'})`
+                        : `Done — ${cleanLeads.length} clean leads`
                 }
             }).catch(() => { });
             console.log(`[JOB] Job ${jobRecord.id} marked as done (${cleanLeads.length} leads)`);
